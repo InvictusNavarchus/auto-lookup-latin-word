@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.2.2
+// @version      0.2.3
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
@@ -72,35 +72,39 @@
             
             const url = `${this.baseUrl}?query=${encodeURIComponent(word)}`;
             return new Promise((resolve, reject) => {
-                const myHeaders = new Headers();
-                myHeaders.append("Host", "latin-words.com");
-                myHeaders.append("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:137.0) Gecko/20100101 Firefox/137.0");
-                myHeaders.append("Accept", "*/*");
-                myHeaders.append("Accept-Language", "en-US,en;q=0.5");
-                myHeaders.append("Accept-Encoding", "gzip, deflate, br, zstd");
-                myHeaders.append("X-Requested-With", "XMLHttpRequest");
-                myHeaders.append("DNT", "1");
-                myHeaders.append("Connection", "keep-alive");
-                myHeaders.append("Referer", "https://latin-words.com/");
-                
-                fetch(url, {
+                GM_xmlhttpRequest({
                     method: "GET",
-                    headers: myHeaders,
-                    redirect: "follow"
-                })
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    url: url,
+                    headers: {
+                        "Host": "latin-words.com",
+                        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:137.0) Gecko/20100101 Firefox/137.0",
+                        "Accept": "*/*",
+                        "Accept-Language": "en-US,en;q=0.5",
+                        "Accept-Encoding": "gzip, deflate, br, zstd",
+                        "X-Requested-With": "XMLHttpRequest",
+                        "DNT": "1",
+                        "Connection": "keep-alive",
+                        "Referer": "https://latin-words.com/"
+                    },
+                    onload: function(response) {
+                        if (response.status >= 200 && response.status < 300) {
+                            try {
+                                const data = JSON.parse(response.responseText);
+                                Logger.debug(`API response received for "${word}"`);
+                                resolve(data);
+                            } catch (e) {
+                                Logger.error(`Failed to parse API response for "${word}": ${e}`);
+                                reject(new Error("Invalid JSON response"));
+                            }
+                        } else {
+                            Logger.error(`API request failed for "${word}" with status: ${response.status}`);
+                            reject(new Error(`HTTP error! Status: ${response.status}`));
+                        }
+                    },
+                    onerror: function(error) {
+                        Logger.error(`API request failed for "${word}": ${error}`);
+                        reject(error);
                     }
-                    return response.json();
-                })
-                .then(data => {
-                    Logger.debug(`API response received for "${word}"`);
-                    resolve(data);
-                })
-                .catch(error => {
-                    Logger.error(`API request failed for "${word}": ${error}`);
-                    reject(error);
                 });
             });
         }
