@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.3.0
+// @version      0.3.1
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
@@ -657,36 +657,53 @@
             return /^[a-zA-ZāēīōūĀĒĪŌŪ]{2,}$/.test(word) && !/^\d+$/.test(word);
         },
 
-        lookupWord: function (word, pageX, pageY, clientX, clientY) { // (Keep lookupWord as is)
+        // New function to strip macrons from vowels
+        stripMacrons: function (word) {
+            // Replace all macron vowels with their non-macron equivalents
+            return word.replace(/[āĀ]/g, 'a')
+                .replace(/[ēĒ]/g, 'e')
+                .replace(/[īĪ]/g, 'i')
+                .replace(/[ōŌ]/g, 'o')
+                .replace(/[ūŪ]/g, 'u');
+        },
+
+        lookupWord: function (word, pageX, pageY, clientX, clientY) {
             Logger.debug(`Looking up word: ${word} at doc(${pageX}, ${pageY}), view(${clientX}, ${clientY})`);
 
-            if (this.cache[word]) {
-                Logger.debug(`Using cached result for "${word}"`);
-                UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(this.cache[word]));
+            // Store the original word with macrons for display
+            const originalWord = word;
+
+            // Strip macrons before API lookup
+            const lookupWord = this.stripMacrons(word);
+            Logger.debug(`Stripped macrons for lookup: "${originalWord}" -> "${lookupWord}"`);
+
+            if (this.cache[lookupWord]) {
+                Logger.debug(`Using cached result for "${lookupWord}"`);
+                UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(this.cache[lookupWord]));
                 return;
             }
 
             UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-loading">Looking up word...</div>');
 
-            LatinAPI.lookupWord(word)
+            LatinAPI.lookupWord(lookupWord)
                 .then(response => {
-                    if (word === this.lastWord) {
+                    if (originalWord === this.lastWord) {
                         const parsedData = ResponseParser.parse(response);
-                        this.cache[word] = parsedData;
+                        this.cache[lookupWord] = parsedData;
                         UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(parsedData));
                     } else {
-                        Logger.debug(`Word changed before API response for "${word}" arrived.`);
+                        Logger.debug(`Word changed before API response for "${lookupWord}" arrived.`);
                     }
                 })
                 .catch(error => {
-                    Logger.error(`Failed to lookup word "${word}": ${error}`);
-                    if (word === this.lastWord) {
+                    Logger.error(`Failed to lookup word "${lookupWord}": ${error}`);
+                    if (originalWord === this.lastWord) {
                         UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
                     }
                 });
         },
 
-        clearHoverTimer: function () { // (Keep clearHoverTimer as is)
+        clearHoverTimer: function () {
             if (this.hoverTimer) {
                 clearTimeout(this.hoverTimer);
                 this.hoverTimer = null;
