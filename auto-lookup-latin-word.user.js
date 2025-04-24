@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.2.4
+// @version      0.2.5
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
@@ -187,6 +187,10 @@
                 this.enabled = !this.enabled;
                 button.className = this.enabled ? 'latin-lookup-enabled' : 'latin-lookup-disabled';
                 Logger.info(`Latin lookup ${this.enabled ? 'enabled' : 'disabled'}`);
+                // Hide tooltip immediately if disabled
+                if (!this.enabled) {
+                    this.hideTooltip();
+                }
             });
 
             document.body.appendChild(button);
@@ -196,40 +200,67 @@
         createTooltip: function () {
             const tooltip = document.createElement('div');
             tooltip.id = 'latin-lookup-tooltip';
-            tooltip.style.display = 'none';
+            tooltip.style.display = 'none'; // Start hidden
+            tooltip.style.position = 'absolute'; // Ensure position is absolute
+            tooltip.style.zIndex = '10000'; // Ensure it's on top
             document.body.appendChild(tooltip);
             this.tooltip = tooltip;
         },
 
-        showTooltip: function (x, y, content) {
+        showTooltip: function (pageX, pageY, clientX, clientY, content) { // <<<< MODIFIED SIGNATURE
             if (!this.enabled) return;
 
             this.tooltip.innerHTML = content;
+            // Make it visible *before* getting bounds, helps ensure dimensions are calculated
+            this.tooltip.style.display = 'block';
+            // Temporarily position off-screen to measure without visual glitch
+            this.tooltip.style.left = '-9999px';
+            this.tooltip.style.top = '-9999px';
 
-            // Position tooltip near cursor but ensure it stays within viewport
-            const rect = this.tooltip.getBoundingClientRect();
+
+            // Force reflow/recalculation if needed (often implicit, but can help)
+            this.tooltip.offsetHeight; // Read a dimension property
+
+            // Get dimensions and viewport size
+            const rect = this.tooltip.getBoundingClientRect(); // Dimensions relative to viewport
             const viewportWidth = window.innerWidth;
             const viewportHeight = window.innerHeight;
 
-            // Adjust position to keep tooltip within viewport
-            let posX = x + 15;
-            let posY = y + 15;
+            // Initial position based on document coordinates (pageX, pageY)
+            let posX = pageX + 15;
+            let posY = pageY + 15;
 
-            if (posX + rect.width > viewportWidth) {
-                posX = x - rect.width - 15;
+            // Adjust position to keep tooltip within viewport boundaries
+            // Use clientX/Y for viewport checks
+
+            // Check right edge (using clientX)
+            if (clientX + 15 + rect.width > viewportWidth) {
+                // If it overflows right, position it to the left of the cursor (using pageX)
+                posX = pageX - rect.width - 15;
             }
 
-            if (posY + rect.height > viewportHeight) {
-                posY = y - rect.height - 15;
+            // Check bottom edge (using clientY)
+            if (clientY + 15 + rect.height > viewportHeight) {
+                // If it overflows bottom, position it above the cursor (using pageY)
+                posY = pageY - rect.height - 15;
             }
 
+            // Ensure tooltip doesn't go off the top or left of the *document*
+            if (posX < 0) posX = 0;
+            if (posY < window.scrollY) posY = window.scrollY; // Adjust if needed based on scroll
+
+            // Apply the final calculated position
             this.tooltip.style.left = `${posX}px`;
             this.tooltip.style.top = `${posY}px`;
+
+            // Ensure display is 'block' (it should be already, but belts and suspenders)
             this.tooltip.style.display = 'block';
-        },
+        }, // <<<< END OF MODIFIED showTooltip
 
         hideTooltip: function () {
-            this.tooltip.style.display = 'none';
+            if (this.tooltip) { // Check if tooltip exists
+                this.tooltip.style.display = 'none';
+            }
         },
 
         formatWordInfo: function (wordInfo) {
@@ -277,13 +308,20 @@
 
         setupEventListeners: function () {
             document.addEventListener('mousemove', this.handleMouseMove.bind(this));
-            document.addEventListener('mouseout', () => {
+            // Use mouseleave on the document body for better detection when mouse exits window
+            document.body.addEventListener('mouseleave', () => {
                 UI.hideTooltip();
                 this.clearHoverTimer();
+                this.lastWord = ''; // Reset lastWord when mouse leaves body
             });
+            // Add scroll listener to hide tooltip on scroll (optional, but good UX)
+            document.addEventListener('scroll', () => {
+                UI.hideTooltip();
+                this.clearHoverTimer();
+            }, true); // Use capture phase for scroll
         },
 
-        handleMouseMove: function (event) {
+        handleMouseMove: function (event) { // <<<< MODIFIED handleMouseMove
             if (!UI.enabled) return;
 
             const target = event.target;
@@ -291,57 +329,89 @@
             // Skip if hovering over our own UI elements
             if (target.id === 'latin-lookup-tooltip' || target.id === 'latin-lookup-toggle' ||
                 target.closest('#latin-lookup-tooltip') || target.closest('#latin-lookup-toggle')) {
+                // Optionally clear timer if mouse moves onto tooltip from text
+                // this.clearHoverTimer();
                 return;
             }
 
             // Check if the element or its parent contains text
-            if (this.isTextNode(target) || this.hasTextChild(target)) {
+            // Use elementFromPoint for more reliable target checking under the cursor
+            const elementUnderCursor = document.elementFromPoint(event.clientX, event.clientY);
+            if (elementUnderCursor && (this.isTextNode(elementUnderCursor) || this.hasTextChild(elementUnderCursor) || (elementUnderCursor.nodeType === Node.ELEMENT_NODE && elementUnderCursor.textContent.trim().length > 0))) {
                 const word = this.getWordAtPoint(event.clientX, event.clientY);
 
                 if (word && word.length > 1 && this.isLatinWord(word)) {
+                    // Check if the word actually changed OR if the mouse moved significantly
+                    // This prevents flickering if the mouse jitters slightly over the same word
                     if (word !== this.lastWord) {
                         this.lastWord = word;
                         this.clearHoverTimer();
 
                         this.hoverTimer = setTimeout(() => {
-                            this.lookupWord(word, event.clientX, event.clientY);
+                            // Pass all relevant coordinates: pageX/Y for positioning, clientX/Y for viewport checks
+                            this.lookupWord(word, event.pageX, event.pageY, event.clientX, event.clientY);
                         }, this.hoverDelay);
                     }
+                    // If it's the same word, do nothing, let existing timer run or tooltip stay visible
                 } else {
+                    // Mouse is over text, but not a valid Latin word or word detection failed
                     UI.hideTooltip();
                     this.clearHoverTimer();
                     this.lastWord = '';
                 }
+            } else {
+                // Mouse is not over a text node or an element containing text
+                UI.hideTooltip();
+                this.clearHoverTimer();
+                this.lastWord = '';
             }
-        },
+        }, // <<<< END OF MODIFIED handleMouseMove
 
         getWordAtPoint: function (x, y) {
-            const element = document.elementFromPoint(x, y);
-            if (!element) return null;
-
-            // Cross-browser compatibility for getting text at point
-            let range, textNode, offset;
-
-            // Chrome/Safari support
-            if (document.caretRangeFromPoint) {
-                range = document.caretRangeFromPoint(x, y);
-                if (!range) return null;
-                textNode = range.startContainer;
-                offset = range.startOffset;
-            }
-            // Firefox support
-            else if (document.caretPositionFromPoint) {
-                const position = document.caretPositionFromPoint(x, y);
-                if (!position) return null;
-                textNode = position.offsetNode;
-                offset = position.offset;
-            }
-
-            // If we couldn't get a position, or the node isn't a text node, return null
-            if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
-
+            // Use try-catch as caretPositionFromPoint can sometimes throw errors
             try {
+                const element = document.elementFromPoint(x, y);
+                if (!element) return null;
+
+                let range, textNode, offset;
+
+                // Prioritize caretPositionFromPoint (Firefox) if available and reliable
+                if (document.caretPositionFromPoint) {
+                    const position = document.caretPositionFromPoint(x, y);
+                    if (position) {
+                        textNode = position.offsetNode;
+                        offset = position.offset;
+                    }
+                }
+                // Fallback to caretRangeFromPoint (Chrome/Safari/Edge)
+                else if (document.caretRangeFromPoint) {
+                    range = document.caretRangeFromPoint(x, y);
+                    if (range) {
+                        textNode = range.startContainer;
+                        offset = range.startOffset;
+                    }
+                }
+
+                // If we couldn't get a position, or the node isn't a text node, try a fallback
+                if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+                    // Fallback: If the element itself has text content directly
+                    if (element.textContent && element.childNodes.length === 1 && element.childNodes[0].nodeType === Node.TEXT_NODE) {
+                        textNode = element.childNodes[0];
+                        // Estimate offset - might not be perfect but better than nothing
+                        offset = Math.floor(textNode.textContent.length / 2);
+                    } else {
+                        return null; // Give up if no suitable text node found
+                    }
+                }
+
+
                 const text = textNode.textContent;
+
+                // Check if offset is valid
+                if (offset < 0 || offset > text.length) {
+                    // If offset is invalid (can happen at edges), try middle of text node
+                    offset = Math.floor(text.length / 2);
+                }
 
                 // Find word boundaries
                 let startPos = this.findWordStart(text, offset);
@@ -349,7 +419,13 @@
 
                 // Extract the word
                 const word = text.substring(startPos, endPos).trim();
-                return word;
+                // Basic sanity check
+                if (word.length > 0 && word.length < 50) { // Avoid excessively long "words"
+                    return word;
+                } else {
+                    return null;
+                }
+
             } catch (e) {
                 Logger.error(`Error getting word at point: ${e}`);
                 return null;
@@ -357,15 +433,27 @@
         },
 
         findWordStart: function (text, offset) {
+            // Adjust offset if it's precisely at the start of a word char following a non-word char
+            if (offset > 0 && !this.isWordChar(text.charAt(offset - 1)) && this.isWordChar(text.charAt(offset))) {
+                // No change needed, offset is good
+            } else {
+                // Otherwise, move offset back one to ensure we are *within* the potential word
+                offset = Math.max(0, offset - 1);
+            }
+
             // Move backward until we find a non-word character or beginning of string
             let pos = offset;
-            while (pos > 0 && this.isWordChar(text.charAt(pos - 1))) {
+            while (pos >= 0 && this.isWordChar(text.charAt(pos))) {
                 pos--;
             }
-            return pos;
+            // The start position is one character after the non-word character (or 0)
+            return pos + 1;
         },
 
         findWordEnd: function (text, offset) {
+            // Ensure offset is within bounds
+            offset = Math.max(0, Math.min(offset, text.length - 1));
+
             // Move forward until we find a non-word character or end of string
             let pos = offset;
             while (pos < text.length && this.isWordChar(text.charAt(pos))) {
@@ -375,12 +463,13 @@
         },
 
         isWordChar: function (char) {
-            // Check if character is a letter (for Latin words)
+            // Check if character is a Latin alphabet letter (case-insensitive)
+            // Allows only a-z and A-Z. Modify if macrons (āēīōū) etc. are needed.
             return /[a-zA-Z]/.test(char);
         },
 
         isTextNode: function (node) {
-            return node.nodeType === Node.TEXT_NODE && node.nodeValue.trim().length > 0;
+            return node && node.nodeType === Node.TEXT_NODE && node.nodeValue.trim().length > 0;
         },
 
         hasTextChild: function (element) {
@@ -388,44 +477,61 @@
 
             for (let i = 0; i < element.childNodes.length; i++) {
                 const node = element.childNodes[i];
-                if (node.nodeType === Node.TEXT_NODE && node.nodeValue.trim().length > 0) {
+                if (this.isTextNode(node)) {
                     return true;
                 }
+                // Optionally, recurse into child elements, but be careful performance-wise
+                // if (node.nodeType === Node.ELEMENT_NODE && this.hasTextChild(node)) {
+                //     return true;
+                // }
             }
 
             return false;
         },
 
         isLatinWord: function (word) {
-            // Basic check for Latin words - allowing only Latin alphabet letters
-            // Excluding common English words would be better but requires a dictionary
-            return /^[a-zA-Z]+$/.test(word) && word.length >= 2;
+            // Basic check: 2+ Latin letters only.
+            // Consider adding checks against common English words if needed later.
+            return /^[a-zA-Z]{2,}$/.test(word);
         },
 
-        lookupWord: function (word, x, y) {
-            Logger.debug(`Looking up word: ${word}`);
+        lookupWord: function (word, pageX, pageY, clientX, clientY) { // <<<< MODIFIED SIGNATURE
+            Logger.debug(`Looking up word: ${word} at doc(${pageX}, ${pageY}), view(${clientX}, ${clientY})`);
 
             // Check cache first
             if (this.cache[word]) {
                 Logger.debug(`Using cached result for "${word}"`);
-                UI.showTooltip(x, y, UI.formatWordInfo(this.cache[word]));
+                // Pass all coordinates to showTooltip
+                UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(this.cache[word]));
                 return;
             }
 
-            // Show loading state
-            UI.showTooltip(x, y, '<div class="latin-lookup-loading">Looking up word...</div>');
+            // Show loading state (pass all coordinates)
+            UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-loading">Looking up word...</div>');
 
             LatinAPI.lookupWord(word)
                 .then(response => {
-                    const wordInfo = ResponseParser.parse(response);
-                    this.cache[word] = wordInfo; // Cache the result
-                    UI.showTooltip(x, y, UI.formatWordInfo(wordInfo));
+                    // Check if the mouse is still over the same word before showing result
+                    if (word === this.lastWord) {
+                        const wordInfo = ResponseParser.parse(response);
+                        this.cache[word] = wordInfo; // Cache the result
+                        // Pass all coordinates to showTooltip
+                        UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(wordInfo));
+                    } else {
+                        Logger.debug(`Word changed before API response for "${word}" arrived.`);
+                        // Optional: hide loading tooltip if it's still showing
+                        // UI.hideTooltip();
+                    }
                 })
                 .catch(error => {
                     Logger.error(`Failed to lookup word "${word}": ${error}`);
-                    UI.showTooltip(x, y, '<div class="latin-lookup-error">Failed to lookup word</div>');
+                    // Check if the mouse is still over the same word before showing error
+                    if (word === this.lastWord) {
+                        // Pass all coordinates to showTooltip
+                        UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
+                    }
                 });
-        },
+        }, // <<<< END OF MODIFIED lookupWord
 
         clearHoverTimer: function () {
             if (this.hoverTimer) {
@@ -439,10 +545,12 @@
     // Styles
     // ====================================
     function addStyles() {
+        // Tooltip styles remain the same, but added position/z-index explicitly here
+        // just in case they weren't already set in createTooltip (redundancy is fine).
         const css = `
             #latin-lookup-tooltip {
-                position: absolute;
-                z-index: 10000;
+                /* position: absolute; */ /* Already set in createTooltip */
+                /* z-index: 10000; */   /* Already set in createTooltip */
                 background-color: #fff;
                 border-radius: 6px;
                 box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
@@ -454,8 +562,10 @@
                 color: #333;
                 transition: opacity 0.2s ease-in-out;
                 border-left: 4px solid #5a67d8;
+                /* Ensure pointer events don't interfere with underlying text selection */
+                pointer-events: none;
             }
-            
+
             #latin-lookup-toggle {
                 position: fixed;
                 bottom: 20px;
@@ -472,60 +582,62 @@
                 z-index: 10001;
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
                 transition: all 0.2s ease;
+                user-select: none; /* Prevent selecting the 'L' */
             }
-            
+
             .latin-lookup-enabled {
                 background-color: #5a67d8;
                 color: #fff;
             }
-            
+
             .latin-lookup-disabled {
                 background-color: #d1d5db;
                 color: #6b7280;
             }
-            
+
             .latin-lookup-header {
                 margin-bottom: 8px;
                 border-bottom: 1px solid #e5e7eb;
                 padding-bottom: 5px;
             }
-            
+
             .latin-lookup-word {
                 font-weight: bold;
                 font-size: 16px;
                 color: #4c51bf;
             }
-            
+
             .latin-lookup-pos {
                 font-style: italic;
                 color: #6b7280;
                 margin-left: 8px;
             }
-            
+
             .latin-lookup-grammar {
                 font-size: 12px;
                 color: #6b7280;
                 margin-bottom: 8px;
             }
-            
+
             .latin-lookup-definitions ul {
                 margin: 0;
                 padding-left: 20px;
             }
-            
+
             .latin-lookup-definitions li {
                 margin-bottom: 4px;
             }
-            
+
             .latin-lookup-loading {
                 font-style: italic;
                 color: #6b7280;
             }
-            
+
             .latin-lookup-error {
                 color: #e53e3e;
+                font-weight: bold;
             }
-            
+
             #latin-lookup-toggle:hover {
                 transform: scale(1.1);
             }
@@ -543,12 +655,15 @@
         addStyles();
         UI.init();
         WordLookup.init();
+        Logger.info("Latin Word Lookup Initialized Successfully");
     }
 
-    // Wait for the page to fully load
+    // Wait for the page to fully load before initializing
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
+        // DOMContentLoaded has already fired
         initialize();
     }
+
 })();
