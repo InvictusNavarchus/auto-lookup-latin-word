@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.2.0
+// @version      0.2.1
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
@@ -314,16 +314,37 @@
             const element = document.elementFromPoint(x, y);
             if (!element) return null;
             
-            // Handle text nodes and elements with text
-            const range = document.caretRangeFromPoint(x, y);
+            // Cross-browser compatibility for getting text at point
+            let range = null;
+            
+            // Chrome/Safari support
+            if (document.caretRangeFromPoint) {
+                range = document.caretRangeFromPoint(x, y);
+            } 
+            // Firefox support
+            else if (document.caretPositionFromPoint) {
+                const position = document.caretPositionFromPoint(x, y);
+                if (position) {
+                    range = document.createRange();
+                    range.setStart(position.offsetNode, position.offset);
+                    range.setEnd(position.offsetNode, position.offset);
+                }
+            }
+            
+            // If we couldn't get a range/position, return null
             if (!range) return null;
             
-            // Expand range to include the whole word
-            range.expand('word');
-            
-            // Get the selected text
-            const word = range.toString().trim();
-            return word;
+            try {
+                // Expand range to include the whole word
+                range.expand('word');
+                
+                // Get the selected text
+                const word = range.toString().trim();
+                return word;
+            } catch (e) {
+                Logger.error(`Error getting word at point: ${e}`);
+                return null;
+            }
         },
         
         isTextNode: function(node) {
