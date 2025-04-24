@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.2.5
+// @version      0.3.0
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
@@ -16,7 +16,7 @@
     'use strict';
 
     // ====================================
-    // Logging System
+    // Logging System (Keep as is)
     // ====================================
     const Logger = {
         levels: {
@@ -61,9 +61,10 @@
             this.info(`Log level set to ${Object.keys(this.levels).find(key => this.levels[key] === level)}`);
         }
     };
+    // Logger.setLevel(Logger.levels.DEBUG); // Uncomment for detailed parsing logs
 
     // ====================================
-    // API Service
+    // API Service (Keep as is)
     // ====================================
     const LatinAPI = {
         baseUrl: 'https://latin-words.com/cgi-bin/translate.cgi',
@@ -112,53 +113,195 @@
     };
 
     // ====================================
-    // Response Parser
+    // Response Parser (REVISED)
     // ====================================
     const ResponseParser = {
+        // Regex Patterns for line identification
+        patterns: {
+            // Matches lines describing the grammatical form of the *queried* word
+            // e.g., "abund.ans   VPAR   1 1 NOM S X PRES ACTIVE  PPL"
+            // e.g., "accept.ae   N      1 1 GEN S F"
+            grammaticalInfo: /^([\w.]+)\s+([A-Z]+)\s+(.+)$/,
+
+            // Matches the main dictionary entry line (lemma, POS, details)
+            // e.g., "abundo, abundare, abundavi, abundatus  V (1st)  [XXXAO]"
+            // e.g., "accepta, acceptae  N (1st) F  [XLXEO]    uncommon"
+            // e.g., "ad   PREP  ACC  [XXXAO]"
+            // e.g., "ad   ADV  [XXXCO]"
+            // e.g., "alii   CONJ   [XXXCC]"
+            // e.g., "ait, -, -  V IMPERS  [XXXAO]"
+            // Captures: 1=lemma/principal parts, 2=POS, 3=details (decl/conj, freq, notes)
+            dictionaryEntry: /^([\w\s\(\),āēīōūĀĒĪŌŪ-]+?)\s+(ADJ|N|V|ADV|PREP|CONJ|INTERJ|PRON|NUM|VPAR|TACKON|SUFFIX|PREFIX)\b(.*)$/,
+
+            // Specific note lines
+            unknown: /^\s*========\s+UNKNOWN\s*$/,
+            twoWords: /^\s*Two words/,
+            wordMod: /^\s*Word mod/,
+            syncope: /^\s*Syncope/,
+            prefix: /^\s*-\s*PREFIX\s*/, // Match PREFIX lines specifically if needed
+            suffix: /^\s*-\s*SUFFIX\s*/, // Match SUFFIX lines specifically if needed
+
+            // General noise/ignore lines
+            ignoreLine: /^[\s\*=\-]+$/, // Ignore lines with only whitespace, '*', '=', or '-'
+        },
+
         parse: function (response) {
-            if (response.status !== "ok" || !response.message) {
+            if (response.status !== "ok" || typeof response.message !== 'string') {
                 Logger.warn("Invalid response format or error status");
-                return { error: "Invalid response" };
+                return { entries: [], grammaticalForms: [], notes: ["Invalid API response format"] };
             }
 
-            const lines = response.message.split('\n').filter(line => line.trim() !== '');
-
-            if (lines.length < 2) {
-                Logger.warn("Response doesn't contain enough information");
-                return { error: "Insufficient data" };
-            }
-
-            // Try to parse grammatical form from first line
-            const grammaticalInfo = lines[0].trim();
-
-            // Extract dictionary form and part of speech from second line
-            const dictionaryLine = lines[1].trim();
-            const partOfSpeech = this.extractPartOfSpeech(dictionaryLine);
-            const dictionaryForm = this.extractDictionaryForm(dictionaryLine);
-
-            // Get definitions from remaining lines
-            const definitions = lines.slice(2).join('\n').trim()
-                .split(';')
-                .map(def => def.trim())
-                .filter(def => def && !def.startsWith('*') && !def.startsWith('='));
-
-            return {
-                word: dictionaryForm,
-                partOfSpeech,
-                grammaticalInfo,
-                definitions
+            const lines = response.message.split('\n');
+            const result = {
+                entries: [],          // Array of parsed dictionary entries
+                grammaticalForms: [], // Array of grammatical analyses for the queried word
+                notes: [],            // General notes about the response
+                unknown: false        // Flag if the word is marked as UNKNOWN
             };
-        },
 
-        extractPartOfSpeech: function (line) {
-            const posMatches = line.match(/\b(ADJ|N|V|ADV|PREP|CONJ|INTERJ)\b(\s+\(\d+\w+\))?/);
-            return posMatches ? posMatches[0] : 'Unknown';
-        },
+            let currentEntry = null;
+            let definitionBuffer = [];
 
-        extractDictionaryForm: function (line) {
-            // Extract the main dictionary form before any parts of speech
-            const mainForm = line.split(/\s+[A-Z]/).shift().trim();
-            return mainForm;
+            const flushEntry = () => {
+                if (currentEntry) {
+                    // Process buffered definition lines
+                    const rawDefinitions = definitionBuffer.join(' ').trim();
+                    if (rawDefinitions) {
+                        // Split by semicolon, but be mindful of potential semicolons within definitions
+                        // A simple split is often good enough here, but could be smarter
+                        currentEntry.definitions = rawDefinitions.split(';')
+                            .map(def => def.trim())
+                            .filter(def => def && !this.patterns.ignoreLine.test(def)); // Basic filter
+                    }
+                    result.entries.push(currentEntry);
+                    Logger.debug(`Flushed entry: ${currentEntry.lemma}, Defs: ${currentEntry.definitions.length}`);
+                }
+                currentEntry = null;
+                definitionBuffer = [];
+            };
+
+            for (const rawLine of lines) {
+                const line = rawLine.replace(/\r$/, '').trim(); // Remove trailing \r and trim whitespace
+
+                if (!line || this.patterns.ignoreLine.test(line)) {
+                    continue; // Skip empty lines or lines with only separators/stars
+                }
+
+                Logger.debug(`Processing line: "${line}"`);
+
+                // Check for specific note patterns first
+                if (this.patterns.unknown.test(line)) {
+                    Logger.debug("-> Matched UNKNOWN");
+                    result.notes.push("Word not found in dictionary.");
+                    result.unknown = true;
+                    flushEntry(); // Finish any previous entry
+                    continue; // Often nothing else useful follows UNKNOWN
+                }
+                if (this.patterns.twoWords.test(line)) {
+                    Logger.debug("-> Matched Two Words");
+                    result.notes.push("API suggests input might be two words.");
+                    // Don't flush entry here, as info might follow
+                    continue;
+                }
+                if (this.patterns.wordMod.test(line) || this.patterns.syncope.test(line)) {
+                    Logger.debug("-> Matched Word Mod/Syncope");
+                    // Add as note to current entry if available, otherwise general
+                    const noteText = line; // Keep the full note
+                    if (currentEntry) currentEntry.notes.push(noteText);
+                    else result.notes.push(noteText);
+                    continue;
+                }
+
+                // Attempt to match dictionary entry
+                let match = line.match(this.patterns.dictionaryEntry);
+                if (match) {
+                    // Heuristic: If the "lemma" part contains typical grammatical codes like "NOM S F", it's probably grammatical info, not a dictionary entry.
+                    const potentialLemma = match[1].trim();
+                    const potentialPos = match[2];
+                    const potentialDetails = match[3].trim();
+
+                    // Avoid misinterpreting grammar lines as dictionary entries
+                    // (e.g. "ab N 1 1 ABL S F" should not be treated as lemma "ab N 1 1 ABL S", POS "F")
+                    // Crude check: If POS is a single letter (like F, M, N, X, C often found in grammar)
+                    // AND the details look like more grammar codes (numbers, letters)
+                    // treat it as grammar. This isn't perfect.
+                    const looksLikeGrammar = /^[A-Z]$/.test(potentialPos) && /^\s*[\dA-Z\s]+/.test(potentialDetails);
+
+                    if (!looksLikeGrammar) {
+                        Logger.debug(`-> Matched Dictionary Entry: Lemma="${potentialLemma}", POS="${potentialPos}", Details="${potentialDetails}"`);
+                        flushEntry(); // Flush the previous entry before starting a new one
+
+                        currentEntry = {
+                            lemma: potentialLemma,
+                            pos: potentialPos,
+                            details: potentialDetails,
+                            notes: [], // Notes specific to this entry
+                            definitions: []
+                        };
+
+                        // Extract frequency/usage notes from details
+                        const detailParts = potentialDetails.split(/\s{2,}/); // Split by multiple spaces
+                        const notes = detailParts.filter(part => /\[[A-Z]+\]|^\w+$/.test(part.trim())); // Look for [XXX] or single words like Late, uncommon
+                        currentEntry.notes.push(...notes);
+                        // Optionally clean up details string? For now, keep it raw.
+                        // currentEntry.details = detailParts.filter(part => !notes.includes(part)).join(' ').trim();
+
+
+                        // Special case: Sometimes definitions are on the same line for PREP, ADV, CONJ
+                        if (['PREP', 'ADV', 'CONJ', 'TACKON'].includes(potentialPos)) {
+                            const definitionPart = potentialDetails.replace(/\[.*?\]|\b(Late|Classic|Early|Medieval|NeoLatin|uncommon|veryrare|lesser|Pliny)\b/gi, '').trim();
+                            if (definitionPart && definitionPart.length > 5) { // Heuristic: definition needs some length
+                                definitionBuffer.push(definitionPart);
+                                Logger.debug(`   -> Found inline definition: "${definitionPart}"`);
+                            }
+                        }
+                        continue; // Move to the next line after identifying a dictionary entry
+                    } else {
+                        Logger.debug(`   -> Dictionary match rejected as likely grammar: "${line}"`);
+                        // Fall through to check if it's grammatical info
+                    }
+                }
+
+                // Attempt to match grammatical info line
+                match = line.match(this.patterns.grammaticalInfo);
+                if (match) {
+                    Logger.debug(`-> Matched Grammatical Info: Word="${match[1]}", POS="${match[2]}", Codes="${match[3]}"`);
+                    result.grammaticalForms.push({
+                        inflectedForm: match[1],
+                        pos: match[2],
+                        codes: match[3].trim()
+                    });
+                    // Usually don't flush entry here, might relate to previous/next entry
+                    continue;
+                }
+
+                // If it's none of the above, assume it's a definition line
+                Logger.debug(`-> Matched Definition Line (default): "${line}"`);
+                if (currentEntry) {
+                    definitionBuffer.push(line);
+                } else {
+                    // Definition line found before any dictionary entry? Add as a general note.
+                    result.notes.push(`Orphaned line: ${line}`);
+                }
+            }
+
+            // Flush the last entry after the loop finishes
+            flushEntry();
+
+            // If no entries found but notes exist, keep the notes.
+            if (result.entries.length === 0 && result.grammaticalForms.length === 0 && !result.unknown) {
+                if (result.notes.length === 0) {
+                    result.notes.push("No parseable information found.");
+                }
+                Logger.warn("Parsing resulted in no entries or grammatical forms.");
+            } else if (result.entries.length === 0 && result.grammaticalForms.length === 0 && result.unknown) {
+                // Already handled by the UNKNOWN note logic
+            } else {
+                Logger.info(`Parsing finished. Found ${result.entries.length} entries, ${result.grammaticalForms.length} grammar forms.`);
+            }
+
+
+            return result;
         }
     };
 
@@ -170,13 +313,13 @@
         tooltip: null,
         toggleButton: null,
 
-        init: function () {
+        init: function () { // (Keep UI.init as is)
             this.createToggleButton();
             this.createTooltip();
             Logger.info("UI components initialized");
         },
 
-        createToggleButton: function () {
+        createToggleButton: function () { // (Keep createToggleButton as is)
             const button = document.createElement('div');
             button.id = 'latin-lookup-toggle';
             button.textContent = 'L';
@@ -187,7 +330,6 @@
                 this.enabled = !this.enabled;
                 button.className = this.enabled ? 'latin-lookup-enabled' : 'latin-lookup-disabled';
                 Logger.info(`Latin lookup ${this.enabled ? 'enabled' : 'disabled'}`);
-                // Hide tooltip immediately if disabled
                 if (!this.enabled) {
                     this.hideTooltip();
                 }
@@ -197,109 +339,146 @@
             this.toggleButton = button;
         },
 
-        createTooltip: function () {
+        createTooltip: function () { // (Keep createTooltip as is)
             const tooltip = document.createElement('div');
             tooltip.id = 'latin-lookup-tooltip';
-            tooltip.style.display = 'none'; // Start hidden
-            tooltip.style.position = 'absolute'; // Ensure position is absolute
-            tooltip.style.zIndex = '10000'; // Ensure it's on top
+            tooltip.style.display = 'none';
+            tooltip.style.position = 'absolute';
+            tooltip.style.zIndex = '10000';
             document.body.appendChild(tooltip);
             this.tooltip = tooltip;
         },
 
-        showTooltip: function (pageX, pageY, clientX, clientY, content) { // <<<< MODIFIED SIGNATURE
+        showTooltip: function (pageX, pageY, clientX, clientY, content) { // (Keep showTooltip as is)
             if (!this.enabled) return;
 
             this.tooltip.innerHTML = content;
-            // Make it visible *before* getting bounds, helps ensure dimensions are calculated
             this.tooltip.style.display = 'block';
-            // Temporarily position off-screen to measure without visual glitch
             this.tooltip.style.left = '-9999px';
             this.tooltip.style.top = '-9999px';
 
+            this.tooltip.offsetHeight;
 
-            // Force reflow/recalculation if needed (often implicit, but can help)
-            this.tooltip.offsetHeight; // Read a dimension property
-
-            // Get dimensions and viewport size
-            const rect = this.tooltip.getBoundingClientRect(); // Dimensions relative to viewport
+            const rect = this.tooltip.getBoundingClientRect();
             const viewportWidth = window.innerWidth;
             const viewportHeight = window.innerHeight;
 
-            // Initial position based on document coordinates (pageX, pageY)
             let posX = pageX + 15;
             let posY = pageY + 15;
 
-            // Adjust position to keep tooltip within viewport boundaries
-            // Use clientX/Y for viewport checks
-
-            // Check right edge (using clientX)
             if (clientX + 15 + rect.width > viewportWidth) {
-                // If it overflows right, position it to the left of the cursor (using pageX)
                 posX = pageX - rect.width - 15;
             }
 
-            // Check bottom edge (using clientY)
             if (clientY + 15 + rect.height > viewportHeight) {
-                // If it overflows bottom, position it above the cursor (using pageY)
                 posY = pageY - rect.height - 15;
             }
 
-            // Ensure tooltip doesn't go off the top or left of the *document*
-            if (posX < 0) posX = 0;
-            if (posY < window.scrollY) posY = window.scrollY; // Adjust if needed based on scroll
+            if (posX < window.scrollX) posX = window.scrollX; // Adjust for horizontal scroll
+            if (posY < window.scrollY) posY = window.scrollY; // Adjust for vertical scroll
 
-            // Apply the final calculated position
             this.tooltip.style.left = `${posX}px`;
             this.tooltip.style.top = `${posY}px`;
-
-            // Ensure display is 'block' (it should be already, but belts and suspenders)
             this.tooltip.style.display = 'block';
-        }, // <<<< END OF MODIFIED showTooltip
+        },
 
-        hideTooltip: function () {
-            if (this.tooltip) { // Check if tooltip exists
+        hideTooltip: function () { // (Keep hideTooltip as is)
+            if (this.tooltip) {
                 this.tooltip.style.display = 'none';
             }
         },
 
-        formatWordInfo: function (wordInfo) {
-            if (wordInfo.error) {
-                return `<div class="latin-lookup-error">${wordInfo.error}</div>`;
+        // REVISED formatWordInfo
+        formatWordInfo: function (parsedData) {
+            if (!parsedData) {
+                return `<div class="latin-lookup-error">Error parsing data</div>`;
             }
 
-            let html = `
-                <div class="latin-lookup-header">
-                    <span class="latin-lookup-word">${wordInfo.word}</span>
-                    <span class="latin-lookup-pos">${wordInfo.partOfSpeech}</span>
-                </div>
-                <div class="latin-lookup-grammar">${wordInfo.grammaticalInfo}</div>
-                <div class="latin-lookup-definitions">
-            `;
+            // Handle cases where parsing found nothing useful or specific errors
+            if (parsedData.entries.length === 0 && parsedData.grammaticalForms.length === 0) {
+                let errorMsg = "No definition found.";
+                if (parsedData.unknown) {
+                    errorMsg = "Word not found in dictionary.";
+                } else if (parsedData.notes.length > 0) {
+                    // Display notes if they exist even without entries
+                    errorMsg = parsedData.notes.join('<br>');
+                }
+                return `<div class="latin-lookup-error">${errorMsg}</div>`;
+            }
 
-            if (wordInfo.definitions && wordInfo.definitions.length > 0) {
-                html += '<ul>';
-                wordInfo.definitions.forEach(def => {
-                    html += `<li>${def}</li>`;
+
+            let html = '';
+
+            // Display Grammatical Forms Found for the queried word
+            if (parsedData.grammaticalForms && parsedData.grammaticalForms.length > 0) {
+                html += '<div class="latin-lookup-grammar-section">';
+                html += '<strong>Queried Form Analysis:</strong><ul>';
+                parsedData.grammaticalForms.forEach(form => {
+                    html += `<li><span class="latin-lookup-grammar-form">${form.inflectedForm}</span>: ${form.pos} ${form.codes}</li>`;
                 });
-                html += '</ul>';
-            } else {
-                html += '<p>No definitions found</p>';
+                html += '</ul></div>';
             }
 
-            html += '</div>';
-            return html;
+            // Display Dictionary Entries
+            if (parsedData.entries && parsedData.entries.length > 0) {
+                parsedData.entries.forEach((entry, index) => {
+                    if (index > 0) {
+                        html += '<hr class="latin-lookup-entry-separator">'; // Separator for multiple entries
+                    }
+                    html += `
+                        <div class="latin-lookup-entry">
+                            <div class="latin-lookup-header">
+                                <span class="latin-lookup-word">${entry.lemma}</span>
+                                <span class="latin-lookup-pos">${entry.pos || ''}</span>
+                            </div>
+                    `;
+                    // Display entry-specific details/notes if any
+                    if (entry.details || entry.notes.length > 0) {
+                        html += `<div class="latin-lookup-entry-details">${entry.details || ''} ${entry.notes.join(' ')}</div>`;
+                    }
+
+                    // Display definitions
+                    html += '<div class="latin-lookup-definitions">';
+                    if (entry.definitions && entry.definitions.length > 0) {
+                        html += '<ul>';
+                        entry.definitions.forEach(def => {
+                            // Basic sanitation - replace potential HTML tags just in case
+                            const safeDef = def.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                            html += `<li>${safeDef}</li>`;
+                        });
+                        html += '</ul>';
+                    } else {
+                        html += '<p>No definitions provided for this entry.</p>';
+                    }
+                    html += '</div>'; // Close latin-lookup-definitions
+                    html += '</div>'; // Close latin-lookup-entry
+                });
+            }
+
+            // Display General Notes if any exist and haven't been shown elsewhere
+            const generalNotesToShow = parsedData.notes.filter(note =>
+                note !== "Word not found in dictionary." &&
+                note !== "API suggests input might be two words." && // Example: decide which notes are general vs entry-specific
+                !note.startsWith("Orphaned line:") // Don't show orphaned lines usually
+            );
+            if (generalNotesToShow.length > 0) {
+                html += '<div class="latin-lookup-general-notes"><strong>Notes:</strong><br>' + generalNotesToShow.join('<br>') + '</div>';
+            }
+
+
+            return html || '<div class="latin-lookup-error">Could not format data.</div>'; // Fallback
         }
     };
 
+
     // ====================================
-    // Word Lookup Handler
+    // Word Lookup Handler (Keep as is)
     // ====================================
     const WordLookup = {
-        hoverDelay: 500,  // Delay in ms
+        hoverDelay: 500,
         hoverTimer: null,
         lastWord: '',
-        cache: {},  // Simple cache to avoid repeated lookups
+        cache: {},
 
         init: function () {
             this.setupEventListeners();
@@ -308,74 +487,59 @@
 
         setupEventListeners: function () {
             document.addEventListener('mousemove', this.handleMouseMove.bind(this));
-            // Use mouseleave on the document body for better detection when mouse exits window
             document.body.addEventListener('mouseleave', () => {
                 UI.hideTooltip();
                 this.clearHoverTimer();
-                this.lastWord = ''; // Reset lastWord when mouse leaves body
+                this.lastWord = '';
             });
-            // Add scroll listener to hide tooltip on scroll (optional, but good UX)
             document.addEventListener('scroll', () => {
                 UI.hideTooltip();
                 this.clearHoverTimer();
-            }, true); // Use capture phase for scroll
+            }, true);
         },
 
-        handleMouseMove: function (event) { // <<<< MODIFIED handleMouseMove
+        handleMouseMove: function (event) {
             if (!UI.enabled) return;
 
             const target = event.target;
 
-            // Skip if hovering over our own UI elements
             if (target.id === 'latin-lookup-tooltip' || target.id === 'latin-lookup-toggle' ||
                 target.closest('#latin-lookup-tooltip') || target.closest('#latin-lookup-toggle')) {
-                // Optionally clear timer if mouse moves onto tooltip from text
-                // this.clearHoverTimer();
                 return;
             }
 
-            // Check if the element or its parent contains text
-            // Use elementFromPoint for more reliable target checking under the cursor
             const elementUnderCursor = document.elementFromPoint(event.clientX, event.clientY);
             if (elementUnderCursor && (this.isTextNode(elementUnderCursor) || this.hasTextChild(elementUnderCursor) || (elementUnderCursor.nodeType === Node.ELEMENT_NODE && elementUnderCursor.textContent.trim().length > 0))) {
                 const word = this.getWordAtPoint(event.clientX, event.clientY);
 
                 if (word && word.length > 1 && this.isLatinWord(word)) {
-                    // Check if the word actually changed OR if the mouse moved significantly
-                    // This prevents flickering if the mouse jitters slightly over the same word
                     if (word !== this.lastWord) {
                         this.lastWord = word;
                         this.clearHoverTimer();
 
                         this.hoverTimer = setTimeout(() => {
-                            // Pass all relevant coordinates: pageX/Y for positioning, clientX/Y for viewport checks
                             this.lookupWord(word, event.pageX, event.pageY, event.clientX, event.clientY);
                         }, this.hoverDelay);
                     }
-                    // If it's the same word, do nothing, let existing timer run or tooltip stay visible
                 } else {
-                    // Mouse is over text, but not a valid Latin word or word detection failed
                     UI.hideTooltip();
                     this.clearHoverTimer();
                     this.lastWord = '';
                 }
             } else {
-                // Mouse is not over a text node or an element containing text
                 UI.hideTooltip();
                 this.clearHoverTimer();
                 this.lastWord = '';
             }
-        }, // <<<< END OF MODIFIED handleMouseMove
+        },
 
         getWordAtPoint: function (x, y) {
-            // Use try-catch as caretPositionFromPoint can sometimes throw errors
             try {
                 const element = document.elementFromPoint(x, y);
                 if (!element) return null;
 
                 let range, textNode, offset;
 
-                // Prioritize caretPositionFromPoint (Firefox) if available and reliable
                 if (document.caretPositionFromPoint) {
                     const position = document.caretPositionFromPoint(x, y);
                     if (position) {
@@ -383,7 +547,6 @@
                         offset = position.offset;
                     }
                 }
-                // Fallback to caretRangeFromPoint (Chrome/Safari/Edge)
                 else if (document.caretRangeFromPoint) {
                     range = document.caretRangeFromPoint(x, y);
                     if (range) {
@@ -392,36 +555,45 @@
                     }
                 }
 
-                // If we couldn't get a position, or the node isn't a text node, try a fallback
                 if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
-                    // Fallback: If the element itself has text content directly
-                    if (element.textContent && element.childNodes.length === 1 && element.childNodes[0].nodeType === Node.TEXT_NODE) {
-                        textNode = element.childNodes[0];
-                        // Estimate offset - might not be perfect but better than nothing
-                        offset = Math.floor(textNode.textContent.length / 2);
-                    } else {
-                        return null; // Give up if no suitable text node found
+                    // Try to find the first text node child if element itself isn't one
+                    let foundTextNode = false;
+                    if (element.childNodes.length > 0) {
+                        for (let i = 0; i < element.childNodes.length; i++) {
+                            if (element.childNodes[i].nodeType === Node.TEXT_NODE && element.childNodes[i].textContent.trim().length > 0) {
+                                textNode = element.childNodes[i];
+                                offset = Math.floor(textNode.textContent.length / 2); // Estimate middle
+                                foundTextNode = true;
+                                break;
+                            }
+                        }
                     }
+                    if (!foundTextNode) return null; // Give up if no suitable text node found
+
+                    // Original Fallback (might be less reliable than above)
+                    // if (element.textContent && element.childNodes.length === 1 && element.childNodes[0].nodeType === Node.TEXT_NODE) {
+                    //     textNode = element.childNodes[0];
+                    //     offset = Math.floor(textNode.textContent.length / 2);
+                    // } else {
+                    //     return null;
+                    // }
                 }
 
 
                 const text = textNode.textContent;
 
-                // Check if offset is valid
                 if (offset < 0 || offset > text.length) {
-                    // If offset is invalid (can happen at edges), try middle of text node
                     offset = Math.floor(text.length / 2);
                 }
 
-                // Find word boundaries
                 let startPos = this.findWordStart(text, offset);
                 let endPos = this.findWordEnd(text, offset);
 
-                // Extract the word
                 const word = text.substring(startPos, endPos).trim();
-                // Basic sanity check
-                if (word.length > 0 && word.length < 50) { // Avoid excessively long "words"
-                    return word;
+
+                if (word.length > 0 && word.length < 50) {
+                    // Normalize: Remove trailing punctuation common in text
+                    return word.replace(/[.,;:!?)"\]]*$/, '');
                 } else {
                     return null;
                 }
@@ -433,29 +605,27 @@
         },
 
         findWordStart: function (text, offset) {
-            // Adjust offset if it's precisely at the start of a word char following a non-word char
             if (offset > 0 && !this.isWordChar(text.charAt(offset - 1)) && this.isWordChar(text.charAt(offset))) {
-                // No change needed, offset is good
+                // Start is good
             } else {
-                // Otherwise, move offset back one to ensure we are *within* the potential word
                 offset = Math.max(0, offset - 1);
             }
 
-            // Move backward until we find a non-word character or beginning of string
             let pos = offset;
             while (pos >= 0 && this.isWordChar(text.charAt(pos))) {
                 pos--;
             }
-            // The start position is one character after the non-word character (or 0)
             return pos + 1;
         },
 
         findWordEnd: function (text, offset) {
-            // Ensure offset is within bounds
             offset = Math.max(0, Math.min(offset, text.length - 1));
-
-            // Move forward until we find a non-word character or end of string
             let pos = offset;
+            // Ensure starting within a word if possible
+            if (!this.isWordChar(text.charAt(pos)) && pos > 0 && this.isWordChar(text.charAt(pos - 1))) {
+                pos = pos - 1; // Step back if we landed just after a word
+            }
+            // Move forward from a potential word character
             while (pos < text.length && this.isWordChar(text.charAt(pos))) {
                 pos++;
             }
@@ -463,77 +633,60 @@
         },
 
         isWordChar: function (char) {
-            // Check if character is a Latin alphabet letter (case-insensitive)
-            // Allows only a-z and A-Z. Modify if macrons (āēīōū) etc. are needed.
-            return /[a-zA-Z]/.test(char);
+            // Include Latin characters with macrons
+            return /[a-zA-ZāēīōūĀĒĪŌŪ]/.test(char);
         },
 
         isTextNode: function (node) {
             return node && node.nodeType === Node.TEXT_NODE && node.nodeValue.trim().length > 0;
         },
 
-        hasTextChild: function (element) {
+        hasTextChild: function (element) { // (Keep hasTextChild as is)
             if (!element || !element.childNodes) return false;
-
             for (let i = 0; i < element.childNodes.length; i++) {
                 const node = element.childNodes[i];
                 if (this.isTextNode(node)) {
                     return true;
                 }
-                // Optionally, recurse into child elements, but be careful performance-wise
-                // if (node.nodeType === Node.ELEMENT_NODE && this.hasTextChild(node)) {
-                //     return true;
-                // }
             }
-
             return false;
         },
 
         isLatinWord: function (word) {
-            // Basic check: 2+ Latin letters only.
-            // Consider adding checks against common English words if needed later.
-            return /^[a-zA-Z]{2,}$/.test(word);
+            // Allow macrons, at least 2 letters. Exclude pure numbers.
+            return /^[a-zA-ZāēīōūĀĒĪŌŪ]{2,}$/.test(word) && !/^\d+$/.test(word);
         },
 
-        lookupWord: function (word, pageX, pageY, clientX, clientY) { // <<<< MODIFIED SIGNATURE
+        lookupWord: function (word, pageX, pageY, clientX, clientY) { // (Keep lookupWord as is)
             Logger.debug(`Looking up word: ${word} at doc(${pageX}, ${pageY}), view(${clientX}, ${clientY})`);
 
-            // Check cache first
             if (this.cache[word]) {
                 Logger.debug(`Using cached result for "${word}"`);
-                // Pass all coordinates to showTooltip
                 UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(this.cache[word]));
                 return;
             }
 
-            // Show loading state (pass all coordinates)
             UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-loading">Looking up word...</div>');
 
             LatinAPI.lookupWord(word)
                 .then(response => {
-                    // Check if the mouse is still over the same word before showing result
                     if (word === this.lastWord) {
-                        const wordInfo = ResponseParser.parse(response);
-                        this.cache[word] = wordInfo; // Cache the result
-                        // Pass all coordinates to showTooltip
-                        UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(wordInfo));
+                        const parsedData = ResponseParser.parse(response);
+                        this.cache[word] = parsedData;
+                        UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(parsedData));
                     } else {
                         Logger.debug(`Word changed before API response for "${word}" arrived.`);
-                        // Optional: hide loading tooltip if it's still showing
-                        // UI.hideTooltip();
                     }
                 })
                 .catch(error => {
                     Logger.error(`Failed to lookup word "${word}": ${error}`);
-                    // Check if the mouse is still over the same word before showing error
                     if (word === this.lastWord) {
-                        // Pass all coordinates to showTooltip
                         UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
                     }
                 });
-        }, // <<<< END OF MODIFIED lookupWord
+        },
 
-        clearHoverTimer: function () {
+        clearHoverTimer: function () { // (Keep clearHoverTimer as is)
             if (this.hoverTimer) {
                 clearTimeout(this.hoverTimer);
                 this.hoverTimer = null;
@@ -542,105 +695,94 @@
     };
 
     // ====================================
-    // Styles
+    // Styles (ADD styles for new elements)
     // ====================================
     function addStyles() {
-        // Tooltip styles remain the same, but added position/z-index explicitly here
-        // just in case they weren't already set in createTooltip (redundancy is fine).
         const css = `
             #latin-lookup-tooltip {
-                /* position: absolute; */ /* Already set in createTooltip */
-                /* z-index: 10000; */   /* Already set in createTooltip */
                 background-color: #fff;
                 border-radius: 6px;
                 box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
                 padding: 12px;
-                max-width: 350px;
+                max-width: 400px; /* Increased max-width */
                 font-family: 'Segoe UI', Tahoma, sans-serif;
                 font-size: 14px;
                 line-height: 1.4;
                 color: #333;
                 transition: opacity 0.2s ease-in-out;
                 border-left: 4px solid #5a67d8;
-                /* Ensure pointer events don't interfere with underlying text selection */
                 pointer-events: none;
             }
 
-            #latin-lookup-toggle {
-                position: fixed;
-                bottom: 20px;
-                right: 20px;
-                width: 40px;
-                height: 40px;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                font-weight: bold;
-                font-size: 18px;
-                z-index: 10001;
-                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-                transition: all 0.2s ease;
-                user-select: none; /* Prevent selecting the 'L' */
+            #latin-lookup-toggle { /* (Keep toggle styles as is) */
+                position: fixed; bottom: 20px; right: 20px;
+                width: 40px; height: 40px; border-radius: 50%;
+                display: flex; align-items: center; justify-content: center;
+                cursor: pointer; font-weight: bold; font-size: 18px;
+                z-index: 10001; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+                transition: all 0.2s ease; user-select: none;
             }
+            .latin-lookup-enabled { background-color: #5a67d8; color: #fff; }
+            .latin-lookup-disabled { background-color: #d1d5db; color: #6b7280; }
+            #latin-lookup-toggle:hover { transform: scale(1.1); }
 
-            .latin-lookup-enabled {
-                background-color: #5a67d8;
-                color: #fff;
-            }
-
-            .latin-lookup-disabled {
-                background-color: #d1d5db;
-                color: #6b7280;
-            }
-
+            /* Entry & Header Styles */
+             .latin-lookup-entry { margin-bottom: 10px; }
+             .latin-lookup-entry:last-child { margin-bottom: 0; }
             .latin-lookup-header {
-                margin-bottom: 8px;
-                border-bottom: 1px solid #e5e7eb;
-                padding-bottom: 5px;
+                margin-bottom: 5px; /* Reduced margin */
+                padding-bottom: 4px; /* Reduced padding */
+                 border-bottom: 1px solid #e5e7eb;
+                 display: flex; /* Use flexbox for alignment */
+                 flex-wrap: wrap; /* Allow wrapping */
+                 align-items: baseline; /* Align items nicely */
             }
-
             .latin-lookup-word {
-                font-weight: bold;
-                font-size: 16px;
-                color: #4c51bf;
+                font-weight: bold; font-size: 16px; color: #4c51bf;
+                margin-right: 8px; /* Space between word and POS */
             }
-
             .latin-lookup-pos {
+                font-style: italic; color: #6b7280; font-size: 13px; /* Slightly smaller POS */
+            }
+            .latin-lookup-entry-details { /* Style for frequency, usage notes etc. */
+                font-size: 11px; color: #888; margin-bottom: 5px;
                 font-style: italic;
-                color: #6b7280;
-                margin-left: 8px;
             }
 
-            .latin-lookup-grammar {
-                font-size: 12px;
-                color: #6b7280;
-                margin-bottom: 8px;
+             /* Grammatical Info Styles */
+            .latin-lookup-grammar-section {
+                margin-bottom: 10px; padding-bottom: 5px;
+                 border-bottom: 1px dashed #ccc; /* Dashed border */
+                 font-size: 12px;
             }
+             .latin-lookup-grammar-section strong { color: #555; }
+             .latin-lookup-grammar-section ul { margin: 2px 0 0 0; padding-left: 18px; list-style-type: circle; }
+             .latin-lookup-grammar-section li { margin-bottom: 2px; }
+             .latin-lookup-grammar-form { font-style: italic; color: #333; } /* Queried form itself */
 
+             /* Definitions */
             .latin-lookup-definitions ul {
-                margin: 0;
-                padding-left: 20px;
+                margin: 0; padding-left: 20px; list-style-type: disc; /* Use disc */
+            }
+            .latin-lookup-definitions li { margin-bottom: 4px; }
+            .latin-lookup-definitions p { /* Style for "No definitions" message */
+                font-style: italic; color: #888; margin: 5px 0;
             }
 
-            .latin-lookup-definitions li {
-                margin-bottom: 4px;
+            /* General Notes & Separator */
+             .latin-lookup-general-notes {
+                 margin-top: 10px; padding-top: 5px;
+                 border-top: 1px dashed #ccc;
+                 font-size: 11px; color: #6b7280; font-style: italic;
+             }
+            .latin-lookup-entry-separator {
+                border: none; border-top: 1px dotted #ccc; margin: 10px 0;
             }
 
-            .latin-lookup-loading {
-                font-style: italic;
-                color: #6b7280;
-            }
 
-            .latin-lookup-error {
-                color: #e53e3e;
-                font-weight: bold;
-            }
-
-            #latin-lookup-toggle:hover {
-                transform: scale(1.1);
-            }
+            /* Loading/Error Styles */
+            .latin-lookup-loading { font-style: italic; color: #6b7280; }
+            .latin-lookup-error { color: #e53e3e; font-weight: bold; }
         `;
 
         GM_addStyle(css);
@@ -648,7 +790,7 @@
     }
 
     // ====================================
-    // Initialization
+    // Initialization (Keep as is)
     // ====================================
     function initialize() {
         Logger.info("Initializing Latin Word Lookup");
@@ -658,11 +800,9 @@
         Logger.info("Latin Word Lookup Initialized Successfully");
     }
 
-    // Wait for the page to fully load before initializing
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', initialize);
     } else {
-        // DOMContentLoaded has already fired
         initialize();
     }
 
