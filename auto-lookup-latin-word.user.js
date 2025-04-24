@@ -14,7 +14,14 @@
 
 (function () {
     'use strict';
-
+        
+    // ====================================
+    // Script Configuration
+    // ====================================
+    const config = {
+        hoverDelay: 350, // Delay in milliseconds before showing tooltip
+    }
+    
     // ====================================
     // Logging System (Keep as is)
     // ====================================
@@ -475,7 +482,7 @@
     // Word Lookup Handler (Keep as is)
     // ====================================
     const WordLookup = {
-        hoverDelay: 350,
+        hoverDelay: config.hoverDelay,
         hoverTimer: null,
         lastWord: '',
         cache: {},
