@@ -475,7 +475,7 @@
     // Word Lookup Handler (Keep as is)
     // ====================================
     const WordLookup = {
-        hoverDelay: 500,
+        hoverDelay: 350,
         hoverTimer: null,
         lastWord: '',
         cache: {},
