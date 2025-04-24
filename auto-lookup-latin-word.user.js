@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.1.0
+// @version      0.2.0
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
 // @grant        GM_addStyle
 // @grant        GM_xmlhttpRequest
+// @downloadURL  https://raw.githubusercontent.com/InvictusNavarchus/auto-lookup-latin-word/master/auto-lookup-latin-word.user.js
+// @updateURL    https://raw.githubusercontent.com/InvictusNavarchus/auto-lookup-latin-word/master/auto-lookup-latin-word.user.js
 // ==/UserScript==
 
 (function() {
