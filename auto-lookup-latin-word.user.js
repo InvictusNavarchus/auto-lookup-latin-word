@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.2.1
+// @version      0.2.2
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
@@ -315,36 +315,63 @@
             if (!element) return null;
             
             // Cross-browser compatibility for getting text at point
-            let range = null;
+            let range, textNode, offset;
             
             // Chrome/Safari support
             if (document.caretRangeFromPoint) {
                 range = document.caretRangeFromPoint(x, y);
+                if (!range) return null;
+                textNode = range.startContainer;
+                offset = range.startOffset;
             } 
             // Firefox support
             else if (document.caretPositionFromPoint) {
                 const position = document.caretPositionFromPoint(x, y);
-                if (position) {
-                    range = document.createRange();
-                    range.setStart(position.offsetNode, position.offset);
-                    range.setEnd(position.offsetNode, position.offset);
-                }
+                if (!position) return null;
+                textNode = position.offsetNode;
+                offset = position.offset;
             }
             
-            // If we couldn't get a range/position, return null
-            if (!range) return null;
+            // If we couldn't get a position, or the node isn't a text node, return null
+            if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
             
             try {
-                // Expand range to include the whole word
-                range.expand('word');
+                const text = textNode.textContent;
                 
-                // Get the selected text
-                const word = range.toString().trim();
+                // Find word boundaries
+                let startPos = this.findWordStart(text, offset);
+                let endPos = this.findWordEnd(text, offset);
+                
+                // Extract the word
+                const word = text.substring(startPos, endPos).trim();
                 return word;
             } catch (e) {
                 Logger.error(`Error getting word at point: ${e}`);
                 return null;
             }
+        },
+        
+        findWordStart: function(text, offset) {
+            // Move backward until we find a non-word character or beginning of string
+            let pos = offset;
+            while (pos > 0 && this.isWordChar(text.charAt(pos - 1))) {
+                pos--;
+            }
+            return pos;
+        },
+        
+        findWordEnd: function(text, offset) {
+            // Move forward until we find a non-word character or end of string
+            let pos = offset;
+            while (pos < text.length && this.isWordChar(text.charAt(pos))) {
+                pos++;
+            }
+            return pos;
+        },
+        
+        isWordChar: function(char) {
+            // Check if character is a letter (for Latin words)
+            return /[a-zA-Z]/.test(char);
         },
         
         isTextNode: function(node) {
