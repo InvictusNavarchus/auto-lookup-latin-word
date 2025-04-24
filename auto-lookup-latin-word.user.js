@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
-// @namespace    http://tampermonkey.net/
+// @namespace    https://github.com/InvictusNavarchus
 // @version      0.1.0
 // @description  Automatically lookup Latin words on hover and display their meanings
 // @author       Invictus
