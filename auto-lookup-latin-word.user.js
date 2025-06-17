@@ -356,7 +356,7 @@
             this.tooltip = tooltip;
         },
 
-        showTooltip: function (pageX, pageY, clientX, clientY, content) { // (Keep showTooltip as is)
+        showTooltip: function (pageX, pageY, clientX, clientY, content) {
             if (!this.enabled) return;
 
             this.tooltip.innerHTML = content;
@@ -370,19 +370,49 @@
             const viewportWidth = window.innerWidth;
             const viewportHeight = window.innerHeight;
 
-            let posX = pageX + 15;
-            let posY = pageY + 15;
+            // Mobile-friendly positioning
+            const isMobile = this.isMobileDevice();
+            let posX, posY;
 
-            if (clientX + 15 + rect.width > viewportWidth) {
-                posX = pageX - rect.width - 15;
+            if (isMobile) {
+                // On mobile, center the tooltip horizontally and position it above/below selection
+                const tooltipWidth = rect.width;
+                const margin = 20; // Margin from screen edges
+                
+                // Center horizontally with margin constraints
+                posX = Math.max(margin, Math.min(
+                    viewportWidth - tooltipWidth - margin,
+                    (viewportWidth - tooltipWidth) / 2
+                )) + window.scrollX;
+                
+                // Position above or below selection based on available space
+                const spaceAbove = clientY;
+                const spaceBelow = viewportHeight - clientY;
+                
+                if (spaceBelow > rect.height + 20 || spaceBelow > spaceAbove) {
+                    // Position below selection
+                    posY = pageY + 20;
+                } else {
+                    // Position above selection
+                    posY = pageY - rect.height - 20;
+                }
+            } else {
+                // Desktop positioning (existing logic)
+                posX = pageX + 15;
+                posY = pageY + 15;
+
+                if (clientX + 15 + rect.width > viewportWidth) {
+                    posX = pageX - rect.width - 15;
+                }
+
+                if (clientY + 15 + rect.height > viewportHeight) {
+                    posY = pageY - rect.height - 15;
+                }
             }
 
-            if (clientY + 15 + rect.height > viewportHeight) {
-                posY = pageY - rect.height - 15;
-            }
-
-            if (posX < window.scrollX) posX = window.scrollX; // Adjust for horizontal scroll
-            if (posY < window.scrollY) posY = window.scrollY; // Adjust for vertical scroll
+            // Ensure tooltip stays within viewport bounds
+            if (posX < window.scrollX) posX = window.scrollX + 10;
+            if (posY < window.scrollY) posY = window.scrollY + 10;
 
             this.tooltip.style.left = `${posX}px`;
             this.tooltip.style.top = `${posY}px`;
@@ -496,19 +526,20 @@
          * Set up event listeners for text selection
          */
         setupEventListeners: function () {
+            // Desktop mouse events
             document.addEventListener('mouseup', this.handleTextSelection.bind(this));
             document.addEventListener('keyup', this.handleTextSelection.bind(this));
             
-            // Hide tooltip when clicking elsewhere
-            document.addEventListener('click', (event) => {
-                if (!event.target.closest('#latin-lookup-tooltip') && 
-                    !event.target.closest('#latin-lookup-toggle')) {
-                    const selection = window.getSelection();
-                    if (selection.rangeCount === 0 || selection.toString().trim() === '') {
-                        UI.hideTooltip();
-                    }
-                }
-            });
+            // Mobile touch events
+            document.addEventListener('touchend', this.handleTextSelection.bind(this));
+            document.addEventListener('touchcancel', this.hideTooltipOnCancel.bind(this));
+            
+            // Selection change events for mobile
+            document.addEventListener('selectionchange', this.handleSelectionChange.bind(this));
+            
+            // Hide tooltip when clicking/tapping elsewhere
+            document.addEventListener('click', this.handleClickAway.bind(this));
+            document.addEventListener('touchstart', this.handleTouchStart.bind(this));
         },
 
         /**
@@ -528,9 +559,6 @@
             }, 10); // Small delay to ensure selection is finalized
         },
 
-        /**
-         * Process the current text selection
-         */
         processSelection: function (event = null) {
             const selection = window.getSelection();
             
@@ -554,11 +582,23 @@
                 const range = selection.getRangeAt(0);
                 const rect = range.getBoundingClientRect();
                 
+                // For mobile, use the center of the selection for better positioning
+                const isMobile = UI.isMobileDevice();
+                let clientX, clientY;
+                
+                if (isMobile) {
+                    // Use center of selection on mobile
+                    clientX = rect.left + (rect.width / 2);
+                    clientY = rect.top + (rect.height / 2);
+                } else {
+                    // Use bottom-left corner on desktop
+                    clientX = rect.left;
+                    clientY = rect.bottom;
+                }
+                
                 // Calculate page coordinates from client coordinates
-                const pageX = rect.left + window.scrollX;
-                const pageY = rect.bottom + window.scrollY;
-                const clientX = rect.left;
-                const clientY = rect.bottom;
+                const pageX = clientX + window.scrollX;
+                const pageY = clientY + window.scrollY;
                 
                 this.lookupWord(word, pageX, pageY, clientX, clientY);
             } else {
@@ -674,6 +714,51 @@
                 pointer-events: auto; /* Allow interaction with tooltip for selection-based lookup */
             }
 
+            /* Mobile-specific styles */
+            @media (max-width: 768px) {
+                #latin-lookup-tooltip {
+                    max-width: calc(100vw - 40px); /* Leave 20px margin on each side */
+                    font-size: 16px; /* Larger font for mobile readability */
+                    padding: 16px; /* More padding for touch-friendly interface */
+                    border-radius: 8px;
+                }
+                
+                #latin-lookup-toggle {
+                    width: 50px !important; /* Larger touch target */
+                    height: 50px !important;
+                    font-size: 20px !important;
+                    bottom: 15px !important; /* Slightly higher for better thumb reach */
+                    right: 15px !important;
+                }
+                
+                .latin-lookup-word {
+                    font-size: 18px !important; /* Larger font for mobile */
+                }
+                
+                .latin-lookup-definitions {
+                    font-size: 15px !important; /* Slightly larger definitions */
+                }
+                
+                .latin-lookup-grammar-section {
+                    font-size: 14px !important; /* Larger grammar text */
+                }
+            }
+
+            /* Touch-friendly improvements */
+            @media (pointer: coarse) {
+                #latin-lookup-tooltip {
+                    min-height: 44px; /* Minimum touch target size */
+                }
+                
+                .latin-lookup-definitions li {
+                    margin-bottom: 6px; /* More spacing between items */
+                }
+                
+                .latin-lookup-grammar-section li {
+                    margin-bottom: 4px; /* More spacing for touch */
+                }
+            }
+
             #latin-lookup-toggle { /* (Keep toggle styles as is) */
                 position: fixed; bottom: 20px; right: 20px;
                 width: 40px; height: 40px; border-radius: 50%;
@@ -681,10 +766,13 @@
                 cursor: pointer; font-weight: bold; font-size: 18px;
                 z-index: 10001; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
                 transition: all 0.2s ease; user-select: none;
+                -webkit-tap-highlight-color: transparent; /* Remove tap highlight on mobile */
+                touch-action: manipulation; /* Improve touch responsiveness */
             }
             .latin-lookup-enabled { background-color: #5a67d8; color: #fff; }
             .latin-lookup-disabled { background-color: #d1d5db; color: #6b7280; }
             #latin-lookup-toggle:hover { transform: scale(1.1); }
+            #latin-lookup-toggle:active { transform: scale(0.95); } /* Touch feedback */
 
             /* Entry & Header Styles */
              .latin-lookup-entry { margin-bottom: 10px; }
