@@ -1,6 +1,6 @@
 # Auto Lookup Latin Word Userscript
 
-![Version](https://img.shields.io/badge/version-0.3.1-blue)
+![Version](https://img.shields.io/badge/version-0.4.0-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 
 A userscript designed to assist users reading Latin text on Vicipaedia (the Latin Wikipedia) by providing quick access to word definitions.
