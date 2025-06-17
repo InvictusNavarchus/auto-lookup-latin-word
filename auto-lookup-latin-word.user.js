@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
-// @version      0.4.1
+// @version      0.5.0
 // @description  Automatically lookup Latin words on text selection and display their meanings
 // @author       Invictus
 // @match        https://la.m.wikipedia.org/*
