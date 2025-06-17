@@ -426,6 +426,16 @@
             }
         },
 
+        /**
+         * Check if the current device is mobile
+         * @returns {boolean} True if the device is mobile, false otherwise
+         */
+        isMobileDevice: function () {
+            return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+                   ('ontouchstart' in window) ||
+                   (navigator.maxTouchPoints > 0);
+        },
+
         // REVISED formatWordInfo
         formatWordInfo: function (parsedData) {
             if (!parsedData) {
