@@ -4,6 +4,7 @@
 // @version      0.5.0
 // @description  Automatically lookup Latin words on text selection and display their meanings
 // @author       Invictus
+// @match        https://la.wikipedia.org/*
 // @match        https://la.m.wikipedia.org/*
 // @connect      latin-words.com
 // @grant        GM_addStyle
