@@ -499,7 +499,6 @@
         setupEventListeners: function () {
             document.addEventListener('mouseup', this.handleTextSelection.bind(this));
             document.addEventListener('keyup', this.handleTextSelection.bind(this));
-            document.addEventListener('selectionchange', this.handleSelectionChange.bind(this));
             
             // Hide tooltip when clicking elsewhere
             document.addEventListener('click', (event) => {
@@ -527,17 +526,6 @@
 
             setTimeout(() => {
                 this.processSelection(event);
-            }, 10); // Small delay to ensure selection is finalized
-        },
-
-        /**
-         * Handle selection change events
-         */
-        handleSelectionChange: function () {
-            if (!UI.enabled) return;
-            
-            setTimeout(() => {
-                this.processSelection();
             }, 10); // Small delay to ensure selection is finalized
         },
 
