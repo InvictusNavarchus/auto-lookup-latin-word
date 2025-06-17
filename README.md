@@ -61,3 +61,7 @@ This script is specifically configured to run on:
 * The selection-based lookup works best with single words or short phrases. For multi-word selections, only the first valid Latin word will be looked up.
 * Performance may vary depending on the complexity of the page and the browser.
 * Works only on the specified `@match` domain (`la.wikipedia.org`).
+
+## License
+
+This project is licensed under the GPL-3.0.
