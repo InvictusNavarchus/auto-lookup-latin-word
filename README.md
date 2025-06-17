@@ -4,11 +4,11 @@ A userscript designed to assist users reading Latin text on Vicipaedia (the Lati
 
 ## Description
 
-This script monitors mouse movements over text content on `https://la.wikipedia.org/*`. When the cursor hovers over a potential Latin word for a brief period, the script automatically queries the `latin-words.com` service for its definition and grammatical information. The results are then displayed in a convenient tooltip near the cursor.
+This script monitors text selections on `https://la.wikipedia.org/*`. When the user selects text containing a Latin word, the script automatically queries the `latin-words.com` service for its definition and grammatical information. The results are then displayed in a convenient tooltip near the selection.
 
 ## Features
 
-* **On-Hover Lookup:** Automatically detects Latin words under the cursor.
+* **On-Selection Lookup:** Automatically detects Latin words from user text selections.
 * **Tooltip Display:** Shows definitions and grammatical analysis in a floating tooltip.
 * **Data Source:** Utilizes the `latin-words.com` website via its translation endpoint.
 * **Parsing:** Interprets the response from `latin-words.com` to extract dictionary entries (lemma, part of speech, definitions) and grammatical forms of the queried word.
@@ -35,22 +35,20 @@ This script is specifically configured to run on:
 
 1.  **Navigate:** Go to any page on `https://la.wikipedia.org/`.
 2.  **Ensure Enabled:** Check that the floating 'L' button (usually in the bottom-right corner) is blue, indicating the script is active. Click it to toggle between enabled (blue) and disabled (grey) states.
-3.  **Hover:** Move your mouse cursor over any Latin word within the main text content.
-4.  **View Tooltip:** After a short delay (approx. 350ms), a tooltip should appear near the word, displaying its definition and grammatical details fetched from `latin-words.com`.
-5.  **Hide Tooltip:** Move the cursor away from the word, scroll the page, or click the toggle button to disable lookups. The tooltip will disappear automatically.
+3.  **Select Text:** Highlight any Latin word or text containing Latin words within the main content.
+4.  **View Tooltip:** A tooltip will appear near the selection, displaying the definition and grammatical details of the first Latin word found in your selection, fetched from `latin-words.com`.
+5.  **Hide Tooltip:** Click elsewhere on the page or make a new selection. The tooltip will disappear automatically.
 
 ## How It Works
 
-* The script listens for `mousemove` events.
-* It attempts to identify the word directly under the cursor using `document.caretPositionFromPoint` or `document.caretRangeFromPoint`.
+* The script listens for text selection events (`mouseup`, `keyup`).
+* When text is selected, it extracts the first valid Latin word from the selection.
 * It validates if the identified text is likely a Latin word (alphabetic characters, including macrons, minimum length 2).
-* A timer prevents lookups on rapid mouse movements.
-* If the same word remains under the cursor for the duration of the `hoverDelay`, the script proceeds.
 * Macrons are stripped from the word before checking the cache or making an API request.
 * If not cached, it makes a `GM_xmlhttpRequest` to the `latin-words.com` endpoint.
 * The JSON response is parsed to extract grammatical forms, dictionary entries, and definitions.
 * This parsed information is formatted into HTML.
-* The HTML content is displayed in the tooltip element, positioned near the cursor while avoiding screen edges.
+* The HTML content is displayed in the tooltip element, positioned near the selection while avoiding screen edges.
 
 ## Dependencies
 
@@ -60,6 +58,6 @@ This script is specifically configured to run on:
 ## Limitations & Considerations
 
 * The accuracy of definitions and parsing depends entirely on the data provided by `latin-words.com` and the script's ability to interpret its specific format.
-* The word detection mechanism might occasionally fail on complex page layouts or specific HTML structures.
+* The selection-based lookup works best with single words or short phrases. For multi-word selections, only the first valid Latin word will be looked up.
 * Performance may vary depending on the complexity of the page and the browser.
 * Works only on the specified `@match` domain (`la.wikipedia.org`).

@@ -2,7 +2,7 @@
 // @name         Auto Lookup Latin Word
 // @namespace    https://github.com/InvictusNavarchus
 // @version      0.3.1
-// @description  Automatically lookup Latin words on hover and display their meanings
+// @description  Automatically lookup Latin words on text selection and display their meanings
 // @author       Invictus
 // @match        https://la.wikipedia.org/*
 // @connect      latin-words.com
@@ -19,7 +19,7 @@
     // Script Configuration
     // ====================================
     const config = {
-        hoverDelay: 350, // Delay in milliseconds before showing tooltip
+        // No longer need hover delay for selection-based lookup
     }
     
     // ====================================
@@ -330,7 +330,7 @@
             const button = document.createElement('div');
             button.id = 'latin-lookup-toggle';
             button.textContent = 'L';
-            button.title = 'Toggle Latin word lookup';
+            button.title = 'Toggle Latin word lookup on selection';
             button.className = 'latin-lookup-enabled';
 
             button.addEventListener('click', () => {
@@ -479,192 +479,138 @@
 
 
     // ====================================
-    // Word Lookup Handler (Keep as is)
+    // Word Lookup Handler (REVISED for selection-based lookup)
     // ====================================
     const WordLookup = {
-        hoverDelay: config.hoverDelay,
-        hoverTimer: null,
-        lastWord: '',
         cache: {},
 
+        /**
+         * Initialize the selection-based word lookup system
+         */
         init: function () {
             this.setupEventListeners();
-            Logger.info("Word lookup handler initialized");
+            Logger.info("Selection-based word lookup handler initialized");
         },
 
+        /**
+         * Set up event listeners for text selection
+         */
         setupEventListeners: function () {
-            document.addEventListener('mousemove', this.handleMouseMove.bind(this));
-            document.body.addEventListener('mouseleave', () => {
-                UI.hideTooltip();
-                this.clearHoverTimer();
-                this.lastWord = '';
+            document.addEventListener('mouseup', this.handleTextSelection.bind(this));
+            document.addEventListener('keyup', this.handleTextSelection.bind(this));
+            
+            // Hide tooltip when clicking elsewhere
+            document.addEventListener('click', (event) => {
+                if (!event.target.closest('#latin-lookup-tooltip') && 
+                    !event.target.closest('#latin-lookup-toggle')) {
+                    const selection = window.getSelection();
+                    if (selection.rangeCount === 0 || selection.toString().trim() === '') {
+                        UI.hideTooltip();
+                    }
+                }
             });
-            document.addEventListener('scroll', () => {
-                UI.hideTooltip();
-                this.clearHoverTimer();
-            }, true);
         },
 
-        handleMouseMove: function (event) {
+        /**
+         * Handle text selection events (mouseup, keyup)
+         */
+        handleTextSelection: function (event) {
             if (!UI.enabled) return;
 
-            const target = event.target;
-
-            if (target.id === 'latin-lookup-tooltip' || target.id === 'latin-lookup-toggle' ||
-                target.closest('#latin-lookup-tooltip') || target.closest('#latin-lookup-toggle')) {
+            // Ignore events on our UI elements
+            if (event.target.closest('#latin-lookup-tooltip') || 
+                event.target.closest('#latin-lookup-toggle')) {
                 return;
             }
 
-            const elementUnderCursor = document.elementFromPoint(event.clientX, event.clientY);
-            if (elementUnderCursor && (this.isTextNode(elementUnderCursor) || this.hasTextChild(elementUnderCursor) || (elementUnderCursor.nodeType === Node.ELEMENT_NODE && elementUnderCursor.textContent.trim().length > 0))) {
-                const word = this.getWordAtPoint(event.clientX, event.clientY);
+            setTimeout(() => {
+                this.processSelection(event);
+            }, 10); // Small delay to ensure selection is finalized
+        },
 
-                if (word && word.length > 1 && this.isLatinWord(word)) {
-                    if (word !== this.lastWord) {
-                        this.lastWord = word;
-                        this.clearHoverTimer();
+        /**
+         * Process the current text selection
+         */
+        processSelection: function (event = null) {
+            const selection = window.getSelection();
+            
+            if (selection.rangeCount === 0) {
+                UI.hideTooltip();
+                return;
+            }
 
-                        this.hoverTimer = setTimeout(() => {
-                            this.lookupWord(word, event.pageX, event.pageY, event.clientX, event.clientY);
-                        }, this.hoverDelay);
-                    }
-                } else {
-                    UI.hideTooltip();
-                    this.clearHoverTimer();
-                    this.lastWord = '';
-                }
+            const selectedText = selection.toString().trim();
+            
+            if (!selectedText) {
+                UI.hideTooltip();
+                return;
+            }
+
+            // Extract a single Latin word from the selection
+            const word = this.extractLatinWord(selectedText);
+            
+            if (word) {
+                // Get position for tooltip
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                
+                // Calculate page coordinates from client coordinates
+                const pageX = rect.left + window.scrollX;
+                const pageY = rect.bottom + window.scrollY;
+                const clientX = rect.left;
+                const clientY = rect.bottom;
+                
+                this.lookupWord(word, pageX, pageY, clientX, clientY);
             } else {
                 UI.hideTooltip();
-                this.clearHoverTimer();
-                this.lastWord = '';
             }
         },
 
-        getWordAtPoint: function (x, y) {
-            try {
-                const element = document.elementFromPoint(x, y);
-                if (!element) return null;
-
-                let range, textNode, offset;
-
-                if (document.caretPositionFromPoint) {
-                    const position = document.caretPositionFromPoint(x, y);
-                    if (position) {
-                        textNode = position.offsetNode;
-                        offset = position.offset;
-                    }
-                }
-                else if (document.caretRangeFromPoint) {
-                    range = document.caretRangeFromPoint(x, y);
-                    if (range) {
-                        textNode = range.startContainer;
-                        offset = range.startOffset;
-                    }
-                }
-
-                if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
-                    // Try to find the first text node child if element itself isn't one
-                    let foundTextNode = false;
-                    if (element.childNodes.length > 0) {
-                        for (let i = 0; i < element.childNodes.length; i++) {
-                            if (element.childNodes[i].nodeType === Node.TEXT_NODE && element.childNodes[i].textContent.trim().length > 0) {
-                                textNode = element.childNodes[i];
-                                offset = Math.floor(textNode.textContent.length / 2); // Estimate middle
-                                foundTextNode = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (!foundTextNode) return null; // Give up if no suitable text node found
-
-                    // Original Fallback (might be less reliable than above)
-                    // if (element.textContent && element.childNodes.length === 1 && element.childNodes[0].nodeType === Node.TEXT_NODE) {
-                    //     textNode = element.childNodes[0];
-                    //     offset = Math.floor(textNode.textContent.length / 2);
-                    // } else {
-                    //     return null;
-                    // }
-                }
-
-
-                const text = textNode.textContent;
-
-                if (offset < 0 || offset > text.length) {
-                    offset = Math.floor(text.length / 2);
-                }
-
-                let startPos = this.findWordStart(text, offset);
-                let endPos = this.findWordEnd(text, offset);
-
-                const word = text.substring(startPos, endPos).trim();
-
-                if (word.length > 0 && word.length < 50) {
-                    // Normalize: Remove trailing punctuation common in text
-                    return word.replace(/[.,;:!?)"\]]*$/, '');
-                } else {
-                    return null;
-                }
-
-            } catch (e) {
-                Logger.error(`Error getting word at point: ${e}`);
-                return null;
+        /**
+         * Extract a single Latin word from selected text
+         */
+        extractLatinWord: function (selectedText) {
+            // Remove extra whitespace and normalize
+            const cleanText = selectedText.replace(/\s+/g, ' ').trim();
+            
+            // If it's a single word, check if it's Latin
+            const words = cleanText.split(/\s+/);
+            
+            if (words.length === 1) {
+                const word = this.normalizeWord(words[0]);
+                return this.isLatinWord(word) ? word : null;
             }
-        },
-
-        findWordStart: function (text, offset) {
-            if (offset > 0 && !this.isWordChar(text.charAt(offset - 1)) && this.isWordChar(text.charAt(offset))) {
-                // Start is good
-            } else {
-                offset = Math.max(0, offset - 1);
-            }
-
-            let pos = offset;
-            while (pos >= 0 && this.isWordChar(text.charAt(pos))) {
-                pos--;
-            }
-            return pos + 1;
-        },
-
-        findWordEnd: function (text, offset) {
-            offset = Math.max(0, Math.min(offset, text.length - 1));
-            let pos = offset;
-            // Ensure starting within a word if possible
-            if (!this.isWordChar(text.charAt(pos)) && pos > 0 && this.isWordChar(text.charAt(pos - 1))) {
-                pos = pos - 1; // Step back if we landed just after a word
-            }
-            // Move forward from a potential word character
-            while (pos < text.length && this.isWordChar(text.charAt(pos))) {
-                pos++;
-            }
-            return pos;
-        },
-
-        isWordChar: function (char) {
-            // Include Latin characters with macrons
-            return /[a-zA-ZāēīōūĀĒĪŌŪ]/.test(char);
-        },
-
-        isTextNode: function (node) {
-            return node && node.nodeType === Node.TEXT_NODE && node.nodeValue.trim().length > 0;
-        },
-
-        hasTextChild: function (element) { // (Keep hasTextChild as is)
-            if (!element || !element.childNodes) return false;
-            for (let i = 0; i < element.childNodes.length; i++) {
-                const node = element.childNodes[i];
-                if (this.isTextNode(node)) {
-                    return true;
+            
+            // If multiple words, try to find the first Latin word
+            for (const word of words) {
+                const normalized = this.normalizeWord(word);
+                if (this.isLatinWord(normalized)) {
+                    return normalized;
                 }
             }
-            return false;
+            
+            return null;
         },
 
+        /**
+         * Normalize a word by removing punctuation
+         */
+        normalizeWord: function (word) {
+            // Remove trailing punctuation common in text
+            return word.replace(/[.,;:!?)"\]]*$/, '').replace(/^[("\[]*/, '');
+        },
+
+        /**
+         * Check if a word is a valid Latin word
+         */
         isLatinWord: function (word) {
             // Allow macrons, at least 2 letters. Exclude pure numbers.
             return /^[a-zA-ZāēīōūĀĒĪŌŪ]{2,}$/.test(word) && !/^\d+$/.test(word);
         },
 
-        // New function to strip macrons from vowels
+        /**
+         * Strip macrons from vowels for API lookup
+         */
         stripMacrons: function (word) {
             // Replace all macron vowels with their non-macron equivalents
             return word.replace(/[āĀ]/g, 'a')
@@ -674,8 +620,11 @@
                 .replace(/[ūŪ]/g, 'u');
         },
 
+        /**
+         * Look up a word using the Latin API
+         */
         lookupWord: function (word, pageX, pageY, clientX, clientY) {
-            Logger.debug(`Looking up word: ${word} at doc(${pageX}, ${pageY}), view(${clientX}, ${clientY})`);
+            Logger.debug(`Looking up selected word: ${word} at doc(${pageX}, ${pageY}), view(${clientX}, ${clientY})`);
 
             // Store the original word with macrons for display
             const originalWord = word;
@@ -694,27 +643,14 @@
 
             LatinAPI.lookupWord(lookupWord)
                 .then(response => {
-                    if (originalWord === this.lastWord) {
-                        const parsedData = ResponseParser.parse(response);
-                        this.cache[lookupWord] = parsedData;
-                        UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(parsedData));
-                    } else {
-                        Logger.debug(`Word changed before API response for "${lookupWord}" arrived.`);
-                    }
+                    const parsedData = ResponseParser.parse(response);
+                    this.cache[lookupWord] = parsedData;
+                    UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(parsedData));
                 })
                 .catch(error => {
                     Logger.error(`Failed to lookup word "${lookupWord}": ${error}`);
-                    if (originalWord === this.lastWord) {
-                        UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
-                    }
+                    UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
                 });
-        },
-
-        clearHoverTimer: function () {
-            if (this.hoverTimer) {
-                clearTimeout(this.hoverTimer);
-                this.hoverTimer = null;
-            }
         }
     };
 
@@ -735,7 +671,7 @@
                 color: #333;
                 transition: opacity 0.2s ease-in-out;
                 border-left: 4px solid #5a67d8;
-                pointer-events: none;
+                pointer-events: auto; /* Allow interaction with tooltip for selection-based lookup */
             }
 
             #latin-lookup-toggle { /* (Keep toggle styles as is) */
