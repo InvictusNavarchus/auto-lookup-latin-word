@@ -482,7 +482,6 @@
     // Word Lookup Handler (REVISED for selection-based lookup)
     // ====================================
     const WordLookup = {
-        lastSelectedWord: '',
         cache: {},
 
         /**
@@ -550,9 +549,7 @@
             // Extract a single Latin word from the selection
             const word = this.extractLatinWord(selectedText);
             
-            if (word && word !== this.lastSelectedWord) {
-                this.lastSelectedWord = word;
-                
+            if (word) {
                 // Get position for tooltip
                 const range = selection.getRangeAt(0);
                 const rect = range.getBoundingClientRect();
@@ -564,9 +561,8 @@
                 const clientY = rect.bottom;
                 
                 this.lookupWord(word, pageX, pageY, clientX, clientY);
-            } else if (!word) {
+            } else {
                 UI.hideTooltip();
-                this.lastSelectedWord = '';
             }
         },
 
@@ -647,19 +643,13 @@
 
             LatinAPI.lookupWord(lookupWord)
                 .then(response => {
-                    if (originalWord === this.lastSelectedWord) {
-                        const parsedData = ResponseParser.parse(response);
-                        this.cache[lookupWord] = parsedData;
-                        UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(parsedData));
-                    } else {
-                        Logger.debug(`Selected word changed before API response for "${lookupWord}" arrived.`);
-                    }
+                    const parsedData = ResponseParser.parse(response);
+                    this.cache[lookupWord] = parsedData;
+                    UI.showTooltip(pageX, pageY, clientX, clientY, UI.formatWordInfo(parsedData));
                 })
                 .catch(error => {
                     Logger.error(`Failed to lookup word "${lookupWord}": ${error}`);
-                    if (originalWord === this.lastSelectedWord) {
-                        UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
-                    }
+                    UI.showTooltip(pageX, pageY, clientX, clientY, '<div class="latin-lookup-error">Failed to lookup word</div>');
                 });
         }
     };
